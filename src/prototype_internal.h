@@ -174,6 +174,15 @@ struct Destruct {
   }
 };
 
+// Optional trait: report external memory held by a native object.
+// Specialize for types that hold significant native resources (GPU buffers, etc.)
+// to enable GC pressure signaling via napi_adjust_external_memory.
+// Default: returns 0 (no external memory tracking).
+template<typename T, typename = void>
+struct ExternalMemorySize {
+  static int64_t Get(T*) { return 0; }
+};
+
 template<typename T>
 struct Destruct<T, typename std::enable_if<is_function_pointer<
                      decltype(&Type<T>::Destructor)>::value>::type> {
@@ -293,6 +302,12 @@ struct DefineClass<T, typename std::enable_if<is_function_pointer<
     napi_ref ref;
     napi_status s = napi_wrap(env, object, data,
                               [](napi_env env, void* data, void* ptr) {
+      // Signal GC that external memory has been freed.
+      int64_t ext = ExternalMemorySize<T>::Get(static_cast<T*>(ptr));
+      if (ext > 0) {
+        int64_t adjusted;
+        napi_adjust_external_memory(env, -ext, &adjusted);
+      }
       InstanceData::Get(env)->DeleteWrapper<T>(ptr);
       Finalize<T>::Do(static_cast<DataType>(data));
       Destruct<T>::Do(static_cast<T*>(ptr));
@@ -301,6 +316,12 @@ struct DefineClass<T, typename std::enable_if<is_function_pointer<
       Finalize<T>::Do(data);
       Destruct<T>::Do(ptr.value());
       ThrowError(env, "Unable to wrap native object.");
+    }
+    // Signal GC about external memory held by this object.
+    int64_t ext_bytes = ExternalMemorySize<T>::Get(ptr.value());
+    if (ext_bytes > 0) {
+      int64_t adjusted;
+      napi_adjust_external_memory(env, ext_bytes, &adjusted);
     }
     // Save wrapper.
     InstanceData::Get(env)->AddWrapper<T>(ptr.value(), ref);
