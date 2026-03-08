@@ -6,6 +6,7 @@
 
 #include <map>
 #include <utility>
+#include <vector>
 
 #include "src/map.h"
 
@@ -109,6 +110,37 @@ class InstanceData {
 
   size_t GetWrappersCount() const {
     return wrappers_.size();
+  }
+
+  // Collect dead wrappers of a specific type: find entries whose JS objects
+  // have been GC'd (reference value is null) but whose deferred finalizers
+  // haven't run yet. Returns native pointers of dead wrappers and removes
+  // them from the registry. Caller is responsible for freeing native memory.
+  template<typename T>
+  std::vector<void*> CollectDeadWrappers() {
+    const char* type_name = internal::TopClass<T>::name;
+    std::vector<WrapperKey> dead_keys;
+    // First pass: find dead wrappers (can't modify map while iterating).
+    for (auto& [key, handle] : wrappers_) {
+      if (key.first != type_name)
+        continue;
+      napi_value value = handle.Value();
+      if (value == nullptr) {
+        dead_keys.push_back(key);
+      }
+    }
+    // Second pass: remove dead entries and collect pointers.
+    std::vector<void*> dead_ptrs;
+    dead_ptrs.reserve(dead_keys.size());
+    for (auto& key : dead_keys) {
+      auto it = wrappers_.find(key);
+      if (it != wrappers_.end()) {
+        it->second.Release();
+        wrappers_.erase(it);
+        dead_ptrs.push_back(key.second);
+      }
+    }
+    return dead_ptrs;
   }
 
  private:

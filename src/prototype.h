@@ -43,12 +43,26 @@ napi_status ManagePointerInJSWrapper(napi_env env, T* ptr, napi_value* result) {
   napi_ref ref;
   napi_status s = napi_wrap(env, object, data,
                             [](napi_env env, void* data, void* ptr) {
-    InstanceData::Get(env)->DeleteWrapper<T>(ptr);
+    // Check if this wrapper was already swept by SweepDeadWrappers.
+    if (!InstanceData::Get(env)->DeleteWrapper<T>(ptr))
+      return;
+    // Signal GC that external memory has been freed.
+    int64_t ext = internal::ExternalMemorySize<T>::Get(static_cast<T*>(ptr));
+    if (ext > 0) {
+      int64_t adjusted;
+      napi_adjust_external_memory(env, -ext, &adjusted);
+    }
     internal::Finalize<T>::Do(static_cast<DataType>(data));
   }, ptr, &ref);
   if (s != napi_ok) {
     internal::Finalize<T>::Do(data);
     return s;
+  }
+  // Signal GC about external memory held by this object.
+  int64_t ext_bytes = internal::ExternalMemorySize<T>::Get(ptr);
+  if (ext_bytes > 0) {
+    int64_t adjusted;
+    napi_adjust_external_memory(env, ext_bytes, &adjusted);
   }
   // Save wrapper.
   instance_data->AddWrapper<T>(ptr, ref);

@@ -302,13 +302,16 @@ struct DefineClass<T, typename std::enable_if<is_function_pointer<
     napi_ref ref;
     napi_status s = napi_wrap(env, object, data,
                               [](napi_env env, void* data, void* ptr) {
+      // Check if this wrapper was already swept by SweepDeadWrappers.
+      // If so, the native object is already freed — do nothing.
+      if (!InstanceData::Get(env)->DeleteWrapper<T>(ptr))
+        return;
       // Signal GC that external memory has been freed.
       int64_t ext = ExternalMemorySize<T>::Get(static_cast<T*>(ptr));
       if (ext > 0) {
         int64_t adjusted;
         napi_adjust_external_memory(env, -ext, &adjusted);
       }
-      InstanceData::Get(env)->DeleteWrapper<T>(ptr);
       Finalize<T>::Do(static_cast<DataType>(data));
       Destruct<T>::Do(static_cast<T*>(ptr));
     }, ptr.value(), &ref);
