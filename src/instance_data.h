@@ -112,6 +112,23 @@ class InstanceData {
     return wrappers_.size();
   }
 
+  // Scan for dead wrappers WITHOUT removing them. Returns native pointers
+  // of entries whose JS weak reference is null.
+  template<typename T>
+  std::vector<void*> ScanDeadWrappers() {
+    const char* type_name = internal::TopClass<T>::name;
+    std::vector<void*> dead_ptrs;
+    for (auto& [key, handle] : wrappers_) {
+      if (key.first != type_name)
+        continue;
+      napi_value value = handle.Value();
+      if (value == nullptr) {
+        dead_ptrs.push_back(key.second);
+      }
+    }
+    return dead_ptrs;
+  }
+
   // Collect dead wrappers of a specific type: find entries whose JS objects
   // have been GC'd (reference value is null) but whose deferred finalizers
   // haven't run yet. Returns native pointers of dead wrappers and removes
